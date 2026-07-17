@@ -23,5 +23,7 @@ apps/OrionPlugins/
 3. Register the plugin in `index.json` with `downloadUrl` and `readmeUrl` pointing to this repo's raw URLs:
 
 ```
-https://raw.githubusercontent.com/LuanMusikTV/Orion-Desktop/main/apps/OrionPlugins/...
+https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/...
 ```
+
+Published catalog: [LuanMusikTV/OrionPlugins](https://github.com/LuanMusikTV/OrionPlugins)
