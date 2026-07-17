@@ -1,0 +1,11 @@
+{
+  "id": "itaku",
+  "name": "Itaku",
+  "version": "1.0.0",
+  "description": "Downloads images from Itaku.ee — art sharing community",
+  "author": "LuanMusikTV",
+  "domains": ["itaku.ee"],
+  "homepage": "https://itaku.ee",
+  "category": "art",
+  "tags": ["art", "community", "gallery"]
+}

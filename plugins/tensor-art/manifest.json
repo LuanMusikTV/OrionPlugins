@@ -1,0 +1,11 @@
+{
+  "id": "tensor-art",
+  "name": "Tensor.Art",
+  "version": "1.0.0",
+  "description": "Downloads images from Tensor.Art — AI art sharing platform",
+  "author": "LuanMusikTV",
+  "domains": ["tensor.art"],
+  "homepage": "https://tensor.art",
+  "category": "art",
+  "tags": ["ai", "art", "stable-diffusion", "images"]
+}

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "updatedAt": "2026-07-16T00:00:00Z",
+  "updatedAt": "2026-07-17T00:00:00Z",
   "plugins": [
     {
       "id": "civitai",
@@ -17,6 +17,55 @@
       "stars": 0,
       "downloads": 0,
       "updatedAt": "2026-07-16T00:00:00Z"
+    },
+    {
+      "id": "poringa",
+      "name": "Poringa",
+      "version": "1.0.0",
+      "description": "Downloads images from individual Poringa.net posts",
+      "author": "LuanMusikTV",
+      "domains": ["www.poringa.net", "poringa.net"],
+      "homepage": "https://www.poringa.net",
+      "category": "social",
+      "tags": ["social", "argentina", "posts"],
+      "nsfw": true,
+      "downloadUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/poringa/poringa.js",
+      "readmeUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/poringa/README.md",
+      "stars": 0,
+      "downloads": 0,
+      "updatedAt": "2026-07-17T00:00:00Z"
+    },
+    {
+      "id": "tensor-art",
+      "name": "Tensor.Art",
+      "version": "1.0.0",
+      "description": "Downloads images from Tensor.Art — AI art sharing platform",
+      "author": "LuanMusikTV",
+      "domains": ["tensor.art"],
+      "homepage": "https://tensor.art",
+      "category": "art",
+      "tags": ["ai", "art", "stable-diffusion", "images"],
+      "downloadUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/tensor-art/tensor-art.js",
+      "readmeUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/tensor-art/README.md",
+      "stars": 0,
+      "downloads": 0,
+      "updatedAt": "2026-07-17T00:00:00Z"
+    },
+    {
+      "id": "itaku",
+      "name": "Itaku",
+      "version": "1.0.0",
+      "description": "Downloads images from Itaku.ee — art sharing community",
+      "author": "LuanMusikTV",
+      "domains": ["itaku.ee"],
+      "homepage": "https://itaku.ee",
+      "category": "art",
+      "tags": ["art", "community", "gallery"],
+      "downloadUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/itaku/itaku.js",
+      "readmeUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/itaku/README.md",
+      "stars": 0,
+      "downloads": 0,
+      "updatedAt": "2026-07-17T00:00:00Z"
     }
   ]
 }
