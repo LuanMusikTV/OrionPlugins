@@ -1,0 +1,22 @@
+{
+  "version": "1",
+  "updatedAt": "2026-07-16T00:00:00Z",
+  "plugins": [
+    {
+      "id": "civitai",
+      "name": "Civitai",
+      "version": "1.0.0",
+      "description": "Downloads models, images and previews from Civitai",
+      "author": "LuanMusikTV",
+      "domains": ["civitai.com"],
+      "homepage": "https://civitai.com",
+      "category": "art",
+      "tags": ["ai", "models", "images", "stable-diffusion"],
+      "downloadUrl": "https://raw.githubusercontent.com/LuanMusikTV/Orion-Desktop/main/apps/OrionPlugins/plugins/civitai/civitai.js",
+      "readmeUrl": "https://raw.githubusercontent.com/LuanMusikTV/Orion-Desktop/main/apps/OrionPlugins/plugins/civitai/README.md",
+      "stars": 0,
+      "downloads": 0,
+      "updatedAt": "2026-07-16T00:00:00Z"
+    }
+  ]
+}

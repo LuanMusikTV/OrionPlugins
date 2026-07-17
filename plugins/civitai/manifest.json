@@ -1,0 +1,11 @@
+{
+  "id": "civitai",
+  "name": "Civitai",
+  "version": "1.0.0",
+  "description": "Downloads models, images and previews from Civitai",
+  "author": "LuanMusikTV",
+  "domains": ["civitai.com"],
+  "homepage": "https://civitai.com",
+  "category": "art",
+  "tags": ["ai", "models", "images", "stable-diffusion"]
+}
