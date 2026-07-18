@@ -1,11 +1,11 @@
 {
   "id": "poringa",
   "name": "Poringa",
-  "version": "1.0.0",
-  "description": "Downloads images from individual Poringa.net posts",
+  "version": "1.2.1",
+  "description": "Downloads images from Poringa.net posts and complete user profiles",
   "author": "LuanMusikTV",
   "domains": ["www.poringa.net", "poringa.net"],
   "homepage": "https://www.poringa.net",
   "category": "social",
-  "tags": ["social", "argentina", "posts"]
+  "tags": ["social", "argentina", "posts", "users"]
 }

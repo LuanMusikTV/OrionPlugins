@@ -1,13 +1,17 @@
 // poringa.js — Ørion Gallery Plugin
 // Downloads images from Poringa.net posts and full user timelines.
+//
+// User profiles are often private (login wall). Like gallery-dl, user downloads
+// are resolved through the public search endpoint `/buscar/?q={username}`.
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36";
 
 const SITE_FOLDER = "Poringa";
 const POST_PATH_RE = /\/posts\/([a-z]+)\/(\d+)(?:\/([^/?#]*))?/i;
-const USER_PATH_RE = /^\/([A-Za-z0-9_.-]{2,40})\/?$/;
-const POST_HREF_RE = /\/posts\/[a-z]+\/\d+\/[^"'?\s#]+\.html/gi;
+// `/User`, `/User/`, `/User/posts`, `/User/posts/`
+const USER_PATH_RE = /^\/([A-Za-z0-9_.-]{2,40})(?:\/posts)?\/?$/i;
+const POST_ID_RE = /\/posts\/imagenes\/(\d+)/gi;
 const RESERVED_USER_PATHS = new Set([
   "posts",
   "buscar",
@@ -24,17 +28,17 @@ const RESERVED_USER_PATHS = new Set([
   "favicon.ico",
   "enciclopedia",
   "rand.php",
+  "perfil",
 ]);
 
 module.exports = {
   name: "Poringa",
-  version: "1.1.0",
+  version: "1.2.1",
   description:
     "Downloads images from Poringa.net posts and complete user profiles",
   author: "LuanMusikTV",
   domains: ["www.poringa.net", "poringa.net"],
   homepage: "https://www.poringa.net",
-  // gallery-dl also ships a Poringa extractor; prefer this plugin for correct paths.
   preferOverGalleryDl: true,
 
   canHandle(url) {
@@ -62,6 +66,12 @@ module.exports = {
 
     ctx.log(`[Poringa] Probing user ${target.user}`);
     const postUrls = await listUserPostUrls(target.user, ctx, { maxPages: 1 });
+    if (postUrls.length === 0) {
+      throw new Error(
+        `User "${target.user}" not found on Poringa (check the exact username)`,
+      );
+    }
+
     return {
       title: `${capitalize(target.user)} — Poringa`,
       artist: capitalize(target.user),
@@ -96,8 +106,15 @@ async function getPostFiles(target, ctx) {
 }
 
 async function getUserFiles(username, ctx) {
-  ctx.log(`[Poringa] Listing posts for user: ${username}`);
+  ctx.log(
+    `[Poringa] Listing posts for user: ${username} (via public search; profiles often require login)`,
+  );
   const postUrls = await listUserPostUrls(username, ctx);
+  if (postUrls.length === 0) {
+    throw new Error(
+      `User "${username}" not found on Poringa (check the exact username)`,
+    );
+  }
   ctx.log(`[Poringa] ${postUrls.length} posts found for ${username}`);
 
   const files = [];
@@ -183,9 +200,23 @@ async function listUserPostUrls(username, ctx, options = {}) {
 
     const searchUrl = `https://www.poringa.net/buscar/?q=${encodeURIComponent(username)}&p=${page}`;
     ctx.log(`[Poringa] Search page ${page}: ${searchUrl}`);
-    const html = await fetchHtml(searchUrl, ctx);
-    const pagePosts = extractPostUrls(html);
 
+    let html;
+    try {
+      html = await fetchHtml(searchUrl, ctx, { allowStatuses: [404, 410] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to search user "${username}": ${message}`);
+    }
+
+    if (!html) {
+      ctx.log(
+        `[Poringa] Search returned empty/gone for "${username}" (HTTP 404/410)`,
+      );
+      break;
+    }
+
+    const pagePosts = extractPostUrls(html, username);
     let added = 0;
     for (const postUrl of pagePosts) {
       if (!found.has(postUrl)) {
@@ -196,7 +227,7 @@ async function listUserPostUrls(username, ctx, options = {}) {
 
     ctx.log(`[Poringa] Page ${page}: +${added} posts (${found.size} total)`);
     // gallery-dl stops around <19 unique ids per page
-    if (pagePosts.length < 10 || added === 0) {
+    if (pagePosts.length < 19 || added === 0) {
       break;
     }
   }
@@ -204,20 +235,49 @@ async function listUserPostUrls(username, ctx, options = {}) {
   return [...found];
 }
 
-function extractPostUrls(html) {
-  const matches = html.match(POST_HREF_RE) || [];
+function extractPostUrls(html, username) {
   const urls = [];
   const seen = new Set();
+  const owner = (username || "").trim();
+  const ownerRe = owner
+    ? new RegExp(`/${escapeRegExp(owner)}/`, "i")
+    : null;
 
-  for (const href of matches) {
-    const normalized = href.startsWith("http")
-      ? href
-      : `https://www.poringa.net${href}`;
-    if (seen.has(normalized) || parseTarget(normalized)?.kind !== "post") {
+  // Prefer full anchors so we keep the slug when present.
+  for (const match of html.matchAll(
+    /href=["']((?:https?:\/\/(?:www\.)?poringa\.net)?\/posts\/imagenes\/\d+(?:\/[^"'?\s#]+)?\.html)["']/gi,
+  )) {
+    const normalized = match[1].startsWith("http")
+      ? match[1]
+      : `https://www.poringa.net${match[1]}`;
+    if (seen.has(normalized)) {
       continue;
+    }
+    // When possible, keep only posts that belong to this user (CDN path / thumbs).
+    if (ownerRe) {
+      const around = html.slice(
+        Math.max(0, match.index - 280),
+        Math.min(html.length, match.index + 280),
+      );
+      if (!ownerRe.test(around) && !ownerRe.test(normalized)) {
+        continue;
+      }
     }
     seen.add(normalized);
     urls.push(normalized);
+  }
+
+  // Fallback: bare post ids (gallery-dl style).
+  if (urls.length === 0) {
+    for (const match of html.matchAll(POST_ID_RE)) {
+      const id = match[1];
+      const normalized = `https://www.poringa.net/posts/imagenes/${id}`;
+      if (seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      urls.push(normalized);
+    }
   }
 
   return urls;
@@ -375,7 +435,14 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function fetchHtml(url, ctx) {
+/**
+ * @param {string} url
+ * @param {{ signal: AbortSignal }} ctx
+ * @param {{ allowStatuses?: number[] }} [options]
+ * @returns {Promise<string|null>} HTML body, or null when status is in allowStatuses.
+ */
+async function fetchHtml(url, ctx, options = {}) {
+  const allowStatuses = new Set(options.allowStatuses || []);
   const response = await fetch(url, {
     headers: {
       "User-Agent": USER_AGENT,
@@ -386,8 +453,19 @@ async function fetchHtml(url, ctx) {
     redirect: "follow",
   });
 
+  if (allowStatuses.has(response.status)) {
+    return null;
+  }
+
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${url}`);
+  }
+
+  // Soft profile wall — caller may still parse, but user listing uses search.
+  if (/\/registro-login\?/i.test(response.url) && /private=profile/i.test(response.url)) {
+    throw new Error(
+      "Private Poringa profile (login required). Use the exact username so search can list public posts.",
+    );
   }
 
   return response.text();
