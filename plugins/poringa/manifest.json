@@ -1,8 +1,8 @@
 {
   "id": "poringa",
   "name": "Poringa",
-  "version": "1.2.1",
-  "description": "Downloads images from Poringa.net posts and complete user profiles",
+  "version": "1.2.2",
+  "description": "Downloads images from Poringa.net posts and complete user profiles (private posts need Auth cookies)",
   "author": "LuanMusikTV",
   "domains": ["www.poringa.net", "poringa.net"],
   "homepage": "https://www.poringa.net",

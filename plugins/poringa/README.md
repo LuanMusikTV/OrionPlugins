@@ -12,6 +12,16 @@ Many profiles redirect to login (`private=profile`). The plugin lists posts thro
 
 **Username must match exactly.** Example: `Putifamosas` works; `Putifamosa` returns “user not found”.
 
+## Private posts
+
+Private posts require a logged-in session. In Ørion:
+
+1. Export cookies for `poringa.net` from your browser (Netscape `cookies.txt`)
+2. Open **Autenticación** → add domain `poringa.net` → method **Archivo cookies**
+3. Retry the private post URL
+
+The plugin (v1.2.2+) receives those cookies automatically. Browser cookie import is not supported for plugins yet — use a cookies file.
+
 ## Folder structure
 
 ```

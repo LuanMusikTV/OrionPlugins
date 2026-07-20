@@ -21,8 +21,8 @@
     {
       "id": "poringa",
       "name": "Poringa",
-      "version": "1.2.1",
-      "description": "Downloads images from Poringa.net posts and complete user profiles",
+      "version": "1.2.2",
+      "description": "Downloads images from Poringa.net posts and complete user profiles (private posts need Auth cookies)",
       "author": "LuanMusikTV",
       "domains": ["www.poringa.net", "poringa.net"],
       "homepage": "https://www.poringa.net",
@@ -33,7 +33,7 @@
       "readmeUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/poringa/README.md",
       "stars": 0,
       "downloads": 0,
-      "updatedAt": "2026-07-18T08:00:00Z"
+      "updatedAt": "2026-07-20T06:00:00Z"
     },
     {
       "id": "tensor-art",

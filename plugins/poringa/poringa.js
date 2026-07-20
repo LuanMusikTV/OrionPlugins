@@ -33,9 +33,9 @@ const RESERVED_USER_PATHS = new Set([
 
 module.exports = {
   name: "Poringa",
-  version: "1.2.1",
+  version: "1.2.2",
   description:
-    "Downloads images from Poringa.net posts and complete user profiles",
+    "Downloads images from Poringa.net posts and complete user profiles (private posts need Auth cookies)",
   author: "LuanMusikTV",
   domains: ["www.poringa.net", "poringa.net"],
   homepage: "https://www.poringa.net",
@@ -53,8 +53,11 @@ module.exports = {
 
     if (target.kind === "post") {
       ctx.log(`[Poringa] Probing post ${target.postId}`);
-      const html = await fetchHtml(absolutePostUrl(target), ctx);
-      const meta = extractPostMeta(html, target);
+      const fetched = await fetchHtml(absolutePostUrl(target), ctx);
+      const meta = extractPostMeta(fetched.html, target, {
+        finalUrl: fetched.finalUrl,
+        hasCookies: Boolean(ctx.cookies),
+      });
       return {
         title: meta.title,
         artist: meta.user,
@@ -97,8 +100,11 @@ module.exports = {
 async function getPostFiles(target, ctx) {
   const postUrl = absolutePostUrl(target);
   ctx.log(`[Poringa] Fetching post: ${postUrl}`);
-  const html = await fetchHtml(postUrl, ctx);
-  const meta = extractPostMeta(html, target);
+  const fetched = await fetchHtml(postUrl, ctx);
+  const meta = extractPostMeta(fetched.html, target, {
+    finalUrl: fetched.finalUrl,
+    hasCookies: Boolean(ctx.cookies),
+  });
   ctx.log(
     `[Poringa] Found ${meta.images.length} images in "${meta.title}" by ${meta.user}`,
   );
@@ -129,8 +135,11 @@ async function getUserFiles(username, ctx) {
     }
 
     try {
-      const html = await fetchHtml(postUrl, ctx);
-      const meta = extractPostMeta(html, parsed);
+      const fetched = await fetchHtml(postUrl, ctx);
+      const meta = extractPostMeta(fetched.html, parsed, {
+        finalUrl: fetched.finalUrl,
+        hasCookies: Boolean(ctx.cookies),
+      });
       // Prefer the profile username for a stable folder name.
       meta.user = capitalize(username);
       const entries = buildFileEntries(meta, postUrl);
@@ -169,9 +178,27 @@ function buildFileEntries(meta, referer) {
   });
 }
 
-function extractPostMeta(html, target) {
-  if (/\/registro-login\?/i.test(html) && /private=post/i.test(html)) {
-    throw new Error(`Private post ${target.postId}`);
+function privatePostError(postId, hasCookies) {
+  if (hasCookies) {
+    return new Error(
+      `Private post ${postId}: login required (cookies rejected or session expired — update Auth for poringa.net)`,
+    );
+  }
+  return new Error(
+    `Private post ${postId}: login required — configure a cookies.txt for poringa.net in Auth`,
+  );
+}
+
+function isPrivatePostResponse(html, finalUrl) {
+  if (/\/registro-login\?/i.test(finalUrl) && /private=post/i.test(finalUrl)) {
+    return true;
+  }
+  return /\/registro-login\?/i.test(html) && /private=post/i.test(html);
+}
+
+function extractPostMeta(html, target, options = {}) {
+  if (isPrivatePostResponse(html, options.finalUrl || "")) {
+    throw privatePostError(target.postId, Boolean(options.hasCookies));
   }
 
   const title = extractTitle(html) || target.slug || `post-${target.postId}`;
@@ -201,22 +228,22 @@ async function listUserPostUrls(username, ctx, options = {}) {
     const searchUrl = `https://www.poringa.net/buscar/?q=${encodeURIComponent(username)}&p=${page}`;
     ctx.log(`[Poringa] Search page ${page}: ${searchUrl}`);
 
-    let html;
+    let fetched;
     try {
-      html = await fetchHtml(searchUrl, ctx, { allowStatuses: [404, 410] });
+      fetched = await fetchHtml(searchUrl, ctx, { allowStatuses: [404, 410] });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to search user "${username}": ${message}`);
     }
 
-    if (!html) {
+    if (!fetched) {
       ctx.log(
         `[Poringa] Search returned empty/gone for "${username}" (HTTP 404/410)`,
       );
       break;
     }
 
-    const pagePosts = extractPostUrls(html, username);
+    const pagePosts = extractPostUrls(fetched.html, username);
     let added = 0;
     for (const postUrl of pagePosts) {
       if (!found.has(postUrl)) {
@@ -437,18 +464,24 @@ function escapeRegExp(value) {
 
 /**
  * @param {string} url
- * @param {{ signal: AbortSignal }} ctx
+ * @param {{ signal: AbortSignal, cookies?: string, headers?: Record<string, string>, userAgent?: string }} ctx
  * @param {{ allowStatuses?: number[] }} [options]
- * @returns {Promise<string|null>} HTML body, or null when status is in allowStatuses.
+ * @returns {Promise<{ html: string, finalUrl: string }|null>}
  */
 async function fetchHtml(url, ctx, options = {}) {
   const allowStatuses = new Set(options.allowStatuses || []);
+  const headers = {
+    "User-Agent": ctx.userAgent || USER_AGENT,
+    "Accept-Language": "es-AR,es;q=0.9",
+    Accept: "text/html,application/xhtml+xml",
+    ...(ctx.headers || {}),
+  };
+  if (ctx.cookies) {
+    headers.Cookie = ctx.cookies;
+  }
+
   const response = await fetch(url, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      "Accept-Language": "es-AR,es;q=0.9",
-      Accept: "text/html,application/xhtml+xml",
-    },
+    headers,
     signal: ctx.signal,
     redirect: "follow",
   });
@@ -464,11 +497,14 @@ async function fetchHtml(url, ctx, options = {}) {
   // Soft profile wall — caller may still parse, but user listing uses search.
   if (/\/registro-login\?/i.test(response.url) && /private=profile/i.test(response.url)) {
     throw new Error(
-      "Private Poringa profile (login required). Use the exact username so search can list public posts.",
+      ctx.cookies
+        ? "Private Poringa profile: login required (cookies rejected or session expired — update Auth for poringa.net)"
+        : "Private Poringa profile: login required — configure cookies for poringa.net in Auth, or use public search via the exact username",
     );
   }
 
-  return response.text();
+  const html = await response.text();
+  return { html, finalUrl: response.url };
 }
 
 function getExt(url) {
