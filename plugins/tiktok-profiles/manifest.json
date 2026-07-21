@@ -1,0 +1,11 @@
+{
+  "id": "tiktok-profiles",
+  "name": "TikTok Profiles",
+  "version": "1.0.1",
+  "description": "Downloads all videos from a TikTok user profile (single video URLs still use gallery-dl)",
+  "author": "LuanMusikTV",
+  "domains": ["tiktok.com", "www.tiktok.com"],
+  "homepage": "https://www.tiktok.com",
+  "category": "social",
+  "tags": ["tiktok", "social", "video", "profiles"]
+}

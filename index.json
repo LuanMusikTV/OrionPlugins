@@ -1,11 +1,11 @@
 {
   "version": "1",
-  "updatedAt": "2026-07-18T00:00:00Z",
+  "updatedAt": "2026-07-21T06:00:00Z",
   "plugins": [
     {
       "id": "civitai",
       "name": "Civitai",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Downloads models, images and previews from Civitai",
       "author": "LuanMusikTV",
       "domains": ["civitai.com"],
@@ -38,7 +38,7 @@
     {
       "id": "tensor-art",
       "name": "Tensor.Art",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Downloads images from Tensor.Art — AI art sharing platform",
       "author": "LuanMusikTV",
       "domains": ["tensor.art"],
@@ -54,7 +54,7 @@
     {
       "id": "itaku",
       "name": "Itaku",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Downloads images from Itaku.ee — art sharing community",
       "author": "LuanMusikTV",
       "domains": ["itaku.ee"],
@@ -66,6 +66,22 @@
       "stars": 0,
       "downloads": 0,
       "updatedAt": "2026-07-17T00:00:00Z"
+    },
+    {
+      "id": "tiktok-profiles",
+      "name": "TikTok Profiles",
+      "version": "1.0.1",
+      "description": "Downloads all videos from a TikTok user profile (single video URLs still use gallery-dl)",
+      "author": "LuanMusikTV",
+      "domains": ["tiktok.com", "www.tiktok.com"],
+      "homepage": "https://www.tiktok.com",
+      "category": "social",
+      "tags": ["tiktok", "social", "video", "profiles"],
+      "downloadUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/tiktok-profiles/tiktok-profiles.js",
+      "readmeUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/tiktok-profiles/README.md",
+      "stars": 0,
+      "downloads": 0,
+      "updatedAt": "2026-07-21T06:00:00Z"
     }
   ]
 }
