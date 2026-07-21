@@ -54,7 +54,7 @@
     {
       "id": "itaku",
       "name": "Itaku",
-      "version": "1.0.1",
+      "version": "1.0.0",
       "description": "Downloads images from Itaku.ee — art sharing community",
       "author": "LuanMusikTV",
       "domains": ["itaku.ee"],
@@ -70,7 +70,7 @@
     {
       "id": "tiktok-profiles",
       "name": "TikTok Profiles",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "Downloads all videos from a TikTok user profile (single video URLs still use gallery-dl)",
       "author": "LuanMusikTV",
       "domains": ["tiktok.com", "www.tiktok.com"],
@@ -81,7 +81,7 @@
       "readmeUrl": "https://raw.githubusercontent.com/LuanMusikTV/OrionPlugins/main/plugins/tiktok-profiles/README.md",
       "stars": 0,
       "downloads": 0,
-      "updatedAt": "2026-07-21T06:00:00Z"
+      "updatedAt": "2026-07-21T15:00:00Z"
     }
   ]
 }

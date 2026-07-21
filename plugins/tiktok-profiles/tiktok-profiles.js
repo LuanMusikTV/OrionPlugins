@@ -28,7 +28,7 @@ const RESERVED_SEGMENTS = new Set([
 
 module.exports = {
   name: "TikTok Profiles",
-  version: "1.0.1",
+  version: "1.0.2",
   description:
     "Downloads all videos from a TikTok user profile (single video URLs still use gallery-dl)",
   author: "LuanMusikTV",
@@ -93,7 +93,14 @@ module.exports = {
       const item = posts[index];
       const postUrl = buildPostPageUrl(item, uniqueId);
       try {
-        const resolved = await resolvePostFiles(item, postUrl, userFolder, session, ctx);
+        const resolved = await resolvePostFiles(
+          item,
+          postUrl,
+          userFolder,
+          session,
+          ctx,
+          uniqueId,
+        );
         files.push(...resolved);
         ctx.log(
           `[TikTok] ${files.length} file(s) ready (${index + 1}/${posts.length})`,
@@ -209,24 +216,15 @@ function extractVideoCount(detail) {
 
 async function listProfilePosts(username, profileUrl, secUid, session, ctx) {
   const items = new Map();
+  const owner = normalizeUsername(username);
 
-  const postsUrl = buildPostsUrl(username);
-  ctx.log(`[TikTok] Reading embedded post list from ${postsUrl}`);
-  try {
-    const postsHtml = await fetchPage(postsUrl, session, ctx);
-    mergeItems(items, extractItemsFromHtml(postsHtml, username));
-    ctx.log(`[TikTok] ${items.size} post(s) from page data`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    ctx.log(`[TikTok] Posts page parse failed: ${message}`);
-  }
-
-  if (items.size === 0 && secUid) {
+  // Prefer the API when we have secUid — it returns that user's posts only.
+  if (secUid) {
     ctx.log("[TikTok] Trying creator/item_list API");
     try {
       const apiItems = await listPostsFromApi(secUid, profileUrl, session, ctx);
-      mergeItems(items, apiItems);
-      ctx.log(`[TikTok] ${items.size} post(s) after API`);
+      mergeOwnedItems(items, apiItems, owner);
+      ctx.log(`[TikTok] ${items.size} post(s) from API`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.log(`[TikTok] API listing failed: ${message}`);
@@ -234,9 +232,22 @@ async function listProfilePosts(username, profileUrl, secUid, session, ctx) {
   }
 
   if (items.size === 0) {
+    const postsUrl = buildPostsUrl(username);
+    ctx.log(`[TikTok] Reading embedded post list from ${postsUrl}`);
+    try {
+      const postsHtml = await fetchPage(postsUrl, session, ctx);
+      mergeOwnedItems(items, extractItemsFromHtml(postsHtml, owner), owner);
+      ctx.log(`[TikTok] ${items.size} post(s) from posts page`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.log(`[TikTok] Posts page parse failed: ${message}`);
+    }
+  }
+
+  if (items.size === 0) {
     ctx.log("[TikTok] Falling back to profile page scrape");
     const profileHtml = await fetchPage(profileUrl, session, ctx);
-    mergeItems(items, extractItemsFromHtml(profileHtml, username));
+    mergeOwnedItems(items, extractItemsFromHtml(profileHtml, owner), owner);
   }
 
   return [...items.values()];
@@ -314,13 +325,16 @@ async function listPostsFromApi(secUid, profileUrl, session, ctx) {
 }
 
 function extractItemsFromHtml(html, username) {
+  const owner = normalizeUsername(username);
   const items = new Map();
   const data = extractRehydrationData(html);
-  mergeItems(items, extractItemsFromRehydration(data));
+  mergeOwnedItems(items, extractItemsFromRehydration(data), owner);
 
-  for (const id of extractVideoIdsFromHtml(html, username)) {
+  // Only accept URLs that explicitly belong to this @user — never generic "id" fields
+  // (TikTok embeds recommended/related video IDs in the same page).
+  for (const id of extractOwnedVideoIdsFromHtml(html, owner)) {
     if (!items.has(id)) {
-      items.set(id, { id, author: { uniqueId: username } });
+      items.set(id, { id, author: { uniqueId: owner } });
     }
   }
 
@@ -332,46 +346,50 @@ function extractItemsFromRehydration(data) {
     return [];
   }
 
-  const direct = data["webapp.user-detail"]?.itemList;
+  const userDetail = data["webapp.user-detail"];
+  if (!userDetail) {
+    return [];
+  }
+
+  const direct = userDetail.itemList;
   if (Array.isArray(direct) && direct.length > 0) {
     return direct;
   }
 
-  return findItemListRecursive(data["webapp.user-detail"]);
+  // Prefer lists nested under userInfo / user-detail only (not global recommendations).
+  return findItemListUnderUserDetail(userDetail);
 }
 
-function findItemListRecursive(value, depth = 0) {
-  if (!value || depth > 10) {
-    return [];
-  }
+function findItemListUnderUserDetail(userDetail) {
+  const candidates = [
+    userDetail?.userInfo?.itemList,
+    userDetail?.itemList,
+    userDetail?.items,
+  ];
 
-  if (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value[0]?.id &&
-    (value[0].video || value[0].imagePost)
-  ) {
-    return value;
-  }
-
-  if (typeof value === "object") {
-    for (const nested of Object.values(value)) {
-      const found = findItemListRecursive(nested, depth + 1);
-      if (found.length > 0) {
-        return found;
-      }
+  for (const list of candidates) {
+    if (Array.isArray(list) && list.length > 0 && list[0]?.id) {
+      return list;
     }
   }
 
   return [];
 }
 
-function extractVideoIdsFromHtml(html, username) {
+function extractOwnedVideoIdsFromHtml(html, username) {
   const ids = new Set();
   const escaped = escapeRegExp(username);
+  // Require the username in the path so recommended reels are ignored.
   const patterns = [
-    new RegExp(`@${escaped}/video/(\\d+)`, "gi"),
-    new RegExp(`"id":"(\\d{15,25})"`, "g"),
+    new RegExp(`@${escaped}/(?:video|photo)/(\\d+)`, "gi"),
+    new RegExp(
+      `"uniqueId"\\s*:\\s*"${escaped}"[\\s\\S]{0,400}?"id"\\s*:\\s*"(\\d{10,25})"`,
+      "gi",
+    ),
+    new RegExp(
+      `"id"\\s*:\\s*"(\\d{10,25})"\\s*,[\\s\\S]{0,400}?"uniqueId"\\s*:\\s*"${escaped}"`,
+      "gi",
+    ),
   ];
 
   for (const pattern of patterns) {
@@ -385,6 +403,41 @@ function extractVideoIdsFromHtml(html, username) {
   return [...ids];
 }
 
+function normalizeUsername(username) {
+  return String(username || "")
+    .trim()
+    .replace(/^@/, "")
+    .toLowerCase();
+}
+
+function itemBelongsToUser(item, owner) {
+  if (!item?.id) {
+    return false;
+  }
+
+  const author =
+    item.author?.uniqueId ||
+    item.author?.unique_id ||
+    item.nickname ||
+    item.uniqueId;
+  if (!author) {
+    // ID-only stubs created from @user/video/ links are trusted.
+    return true;
+  }
+
+  return normalizeUsername(author) === owner;
+}
+
+function mergeOwnedItems(target, items, owner) {
+  const normalizedOwner = normalizeUsername(owner);
+  for (const item of items) {
+    if (!itemBelongsToUser(item, normalizedOwner)) {
+      continue;
+    }
+    target.set(String(item.id), item);
+  }
+}
+
 function mergeItems(target, items) {
   for (const item of items) {
     if (!item?.id) {
@@ -394,8 +447,13 @@ function mergeItems(target, items) {
   }
 }
 
-async function resolvePostFiles(item, postUrl, userFolder, session, ctx) {
+async function resolvePostFiles(item, postUrl, userFolder, session, ctx, expectedOwner) {
+  const owner = normalizeUsername(expectedOwner || userFolder);
+
   if (item.video || item.imagePost) {
+    if (!itemBelongsToUser(item, owner)) {
+      throw new Error(`Post ${item.id} belongs to another user`);
+    }
     const direct = buildFilesFromItemStruct(item, userFolder, postUrl, ctx);
     if (direct.length > 0) {
       return direct;
@@ -408,6 +466,12 @@ async function resolvePostFiles(item, postUrl, userFolder, session, ctx) {
 
   if (!post) {
     throw new Error("Could not read post metadata");
+  }
+
+  if (!itemBelongsToUser(post, owner)) {
+    throw new Error(
+      `Post ${post.id} is by @${post.author?.uniqueId || "unknown"}, not @${owner}`,
+    );
   }
 
   return buildFilesFromItemStruct(post, userFolder, postUrl, ctx);
@@ -578,7 +642,7 @@ async function fetchPage(url, session, ctx) {
       continue;
     }
 
-    if (extractRehydrationData(html) || extractVideoIdsFromHtml(html, "").length > 0) {
+    if (extractRehydrationData(html) || /\/@(?:[^/"'?#]+)\/(?:video|photo)\/\d+/i.test(html)) {
       return html;
     }
 
