@@ -3,6 +3,10 @@
 // Single /video/ URLs are left to gallery-dl (built-in extractor).
 
 const crypto = require("crypto");
+const { spawn } = require("child_process");
+const { existsSync, mkdtempSync, writeFileSync, rmSync, readFileSync, mkdirSync, statSync } = require("fs");
+const { tmpdir, homedir } = require("os");
+const { join, basename } = require("path");
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -28,7 +32,7 @@ const RESERVED_SEGMENTS = new Set([
 
 module.exports = {
   name: "TikTok Profiles",
-  version: "1.0.2",
+  version: "1.0.6",
   description:
     "Downloads all videos from a TikTok user profile (single video URLs still use gallery-dl)",
   author: "LuanMusikTV",
@@ -73,6 +77,14 @@ module.exports = {
     const secUid = userDetail?.userInfo?.user?.secUid;
 
     ctx.log(`[TikTok] Listing posts for @${uniqueId}`);
+    if (session.cookiesFilePath) {
+      ctx.log(`[TikTok] Auth cookies file: ${basename(session.cookiesFilePath)}`);
+    } else if (ctx.cookies) {
+      ctx.log("[TikTok] Using Cookie header from Auth (no cookies file path found)");
+    } else {
+      ctx.log("[TikTok] WARNING: no Auth cookies loaded — resolution may fail");
+    }
+
     const posts = await listProfilePosts(uniqueId, profileUrl, secUid, session, ctx);
 
     if (posts.length === 0) {
@@ -81,34 +93,53 @@ module.exports = {
       );
     }
 
-    ctx.log(`[TikTok] ${posts.length} post(s) found — resolving download URLs`);
+    ctx.log(`[TikTok] ${posts.length} post(s) found — downloading via gallery-dl`);
     const files = [];
     const userFolder = capitalize(uniqueId);
+    const destDir = join(ctx.outputDir, SITE_FOLDER, userFolder);
+    mkdirSync(destDir, { recursive: true });
 
     for (let index = 0; index < posts.length; index += 1) {
       if (ctx.signal.aborted) {
         throw new Error("Operation canceled");
       }
 
+      if (index > 0) {
+        await sleep(400);
+      }
+
       const item = posts[index];
       const postUrl = buildPostPageUrl(item, uniqueId);
+
       try {
-        const resolved = await resolvePostFiles(
-          item,
-          postUrl,
-          userFolder,
-          session,
-          ctx,
-          uniqueId,
-        );
-        files.push(...resolved);
-        ctx.log(
-          `[TikTok] ${files.length} file(s) ready (${index + 1}/${posts.length})`,
-        );
+        let localPath = findDownloadedPostFile(destDir, item.id);
+        if (localPath) {
+          ctx.log(`[TikTok] ${item.id}: already on disk`);
+        } else {
+          await downloadPostWithGalleryDl(postUrl, destDir, item.id, session, ctx);
+          localPath = findDownloadedPostFile(destDir, item.id);
+        }
+
+        if (!localPath) {
+          throw new Error("gallery-dl finished but output file is missing");
+        }
+
+        const ext = localPath.includes(".")
+          ? localPath.slice(localPath.lastIndexOf(".") + 1)
+          : "mp4";
+        const relativeName = `${SITE_FOLDER}/${userFolder}/${item.id}.${ext}`;
+
+        files.push({
+          url: postUrl,
+          filename: relativeName,
+          localPath,
+          referer: postUrl,
+        });
+        ctx.log(`[TikTok] ${files.length} file(s) ready (${index + 1}/${posts.length})`);
         ctx.onProgress({
-          completedFiles: 0,
-          totalFiles: files.length,
-          currentFile: postUrl,
+          completedFiles: files.length,
+          totalFiles: posts.length,
+          currentFile: relativeName,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -118,7 +149,7 @@ module.exports = {
 
     if (files.length === 0) {
       throw new Error(
-        `Could not resolve any media for @${uniqueId}. TikTok may be blocking requests — export fresh cookies and retry.`,
+        `Could not download any media for @${uniqueId}. Check Auth cookies for tiktok.com and retry.`,
       );
     }
 
@@ -127,7 +158,37 @@ module.exports = {
 };
 
 function createSession(ctx) {
-  return { cookies: createCookieState(ctx.cookies) };
+  const cookiesFilePath = resolveAuthCookiesFilePath();
+  return {
+    cookies: createCookieState(ctx.cookies),
+    cookiesFilePath,
+  };
+}
+
+function resolveAuthCookiesFilePath() {
+  try {
+    const authPath = join(homedir(), ".orion", "gallery-downloader", "auth.json");
+    if (!existsSync(authPath)) {
+      return null;
+    }
+    const raw = JSON.parse(readFileSync(authPath, "utf8"));
+    const configs = Array.isArray(raw?.configs) ? raw.configs : [];
+    const match = configs.find((config) => {
+      if (!config?.enabled || config.method !== "cookies-file") {
+        return false;
+      }
+      const domain = String(config.siteDomain || "")
+        .toLowerCase()
+        .replace(/^www\./, "");
+      return domain === "tiktok.com" || domain.endsWith(".tiktok.com");
+    });
+    if (!match?.cookiesFilePath || !existsSync(match.cookiesFilePath)) {
+      return null;
+    }
+    return match.cookiesFilePath;
+  } catch {
+    return null;
+  }
 }
 
 function parseProfileTarget(url) {
@@ -272,7 +333,7 @@ async function listPostsFromApi(secUid, profileUrl, session, ctx) {
       {
         secUid,
         type: "1",
-        count: "35",
+        count: "15",
       },
       deviceId,
       session,
@@ -280,6 +341,11 @@ async function listPostsFromApi(secUid, profileUrl, session, ctx) {
 
     ctx.log(`[TikTok] API page ${page}`);
     const data = await fetchJson(apiUrl, session, ctx, { referer: profileUrl });
+    if (data.statusCode && data.statusCode !== 0) {
+      throw new Error(
+        `TikTok API ${data.statusCode}: ${data.statusMsg || data.status_msg || "error"}`,
+      );
+    }
     const batch = Array.isArray(data.itemList) ? data.itemList : [];
 
     if (batch.length === 0) {
@@ -379,27 +445,14 @@ function findItemListUnderUserDetail(userDetail) {
 function extractOwnedVideoIdsFromHtml(html, username) {
   const ids = new Set();
   const escaped = escapeRegExp(username);
-  // Require the username in the path so recommended reels are ignored.
-  const patterns = [
-    new RegExp(`@${escaped}/(?:video|photo)/(\\d+)`, "gi"),
-    new RegExp(
-      `"uniqueId"\\s*:\\s*"${escaped}"[\\s\\S]{0,400}?"id"\\s*:\\s*"(\\d{10,25})"`,
-      "gi",
-    ),
-    new RegExp(
-      `"id"\\s*:\\s*"(\\d{10,25})"\\s*,[\\s\\S]{0,400}?"uniqueId"\\s*:\\s*"${escaped}"`,
-      "gi",
-    ),
-  ];
-
-  for (const pattern of patterns) {
-    for (const match of html.matchAll(pattern)) {
-      if (match[1]) {
-        ids.add(match[1]);
-      }
+  // Only accept explicit profile media links. Broader JSON "id" matching
+  // pulls deleted/recommended posts that gallery-dl then rejects.
+  const pattern = new RegExp(`@${escaped}/(?:video|photo)/(\\d+)`, "gi");
+  for (const match of html.matchAll(pattern)) {
+    if (match[1]) {
+      ids.add(match[1]);
     }
   }
-
   return [...ids];
 }
 
@@ -449,40 +502,81 @@ function mergeItems(target, items) {
 
 async function resolvePostFiles(item, postUrl, userFolder, session, ctx, expectedOwner) {
   const owner = normalizeUsername(expectedOwner || userFolder);
+  const errors = [];
 
-  if (item.video || item.imagePost) {
-    if (!itemBelongsToUser(item, owner)) {
-      throw new Error(`Post ${item.id} belongs to another user`);
+  // 1) Media already present on list items (rare, but free).
+  try {
+    if (itemBelongsToUser(item, owner)) {
+      const direct = buildFilesFromItemStruct(item, userFolder, postUrl, ctx);
+      if (direct.length > 0) {
+        ctx.log(`[TikTok] ${item.id}: media from list payload`);
+        return direct;
+      }
     }
-    const direct = buildFilesFromItemStruct(item, userFolder, postUrl, ctx);
-    if (direct.length > 0) {
-      return direct;
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+
+  // 2) Primary path: gallery-dl --get-urls with the Auth Netscape cookies file.
+  //    Single TikTok videos already work this way in Ørion.
+  try {
+    const urls = await resolveUrlsWithGalleryDl(postUrl, session, ctx);
+    if (urls.length > 0) {
+      ctx.log(`[TikTok] ${item.id}: resolved ${urls.length} URL(s) via gallery-dl`);
+      return urls.map((url, index) => {
+        const ext = guessExtension(url);
+        const suffix = urls.length > 1 ? `_${String(index + 1).padStart(2, "0")}` : "";
+        return {
+          url,
+          filename: `${SITE_FOLDER}/${userFolder}/${item.id}${suffix}.${ext}`,
+          referer: postUrl,
+          headers: buildFileHeaders(ctx, postUrl),
+        };
+      });
     }
+    errors.push("gallery-dl returned no URLs");
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
   }
 
-  const html = await fetchPage(postUrl, session, ctx);
-  const data = extractRehydrationData(html);
-  const post = data?.["webapp.video-detail"]?.itemInfo?.itemStruct;
-
-  if (!post) {
-    throw new Error("Could not read post metadata");
+  // 3) Last resort: post page rehydration.
+  try {
+    const html = await fetchPage(postUrl, session, ctx);
+    const data = extractRehydrationData(html);
+    const post = data?.["webapp.video-detail"]?.itemInfo?.itemStruct;
+    if (post) {
+      if (!itemBelongsToUser(post, owner)) {
+        throw new Error(
+          `Post ${post.id} is by @${post.author?.uniqueId || "unknown"}, not @${owner}`,
+        );
+      }
+      const fromPage = buildFilesFromItemStruct(post, userFolder, postUrl, ctx);
+      if (fromPage.length > 0) {
+        return fromPage;
+      }
+      throw new Error("Post page had no downloadable media URLs");
+    }
+    throw new Error("Could not read post metadata from page");
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
   }
 
-  if (!itemBelongsToUser(post, owner)) {
-    throw new Error(
-      `Post ${post.id} is by @${post.author?.uniqueId || "unknown"}, not @${owner}`,
-    );
-  }
-
-  return buildFilesFromItemStruct(post, userFolder, postUrl, ctx);
+  throw new Error(errors.filter(Boolean).join(" | ") || "No media URL");
 }
 
 function buildFilesFromItemStruct(post, userFolder, referer, ctx) {
+  if (!post?.id) {
+    return [];
+  }
+
   const files = [];
 
   if (post.imagePost?.images?.length) {
     post.imagePost.images.forEach((image, index) => {
-      const url = image?.imageURL?.urlList?.[0];
+      const url =
+        image?.imageURL?.urlList?.[0] ||
+        image?.imageUrl?.urlList?.[0] ||
+        image?.urlList?.[0];
       if (!url) {
         return;
       }
@@ -494,10 +588,12 @@ function buildFilesFromItemStruct(post, userFolder, referer, ctx) {
         headers: buildFileHeaders(ctx, referer),
       });
     });
-    return files;
+    if (files.length > 0) {
+      return files;
+    }
   }
 
-  const videoUrl = extractVideoDownloadUrl(post.video);
+  const videoUrl = extractVideoDownloadUrl(post.video || post);
   if (!videoUrl) {
     return files;
   }
@@ -512,33 +608,283 @@ function buildFilesFromItemStruct(post, userFolder, referer, ctx) {
 }
 
 function extractVideoDownloadUrl(video) {
-  if (!video) {
+  if (!video || typeof video !== "object") {
     return null;
   }
 
-  const bitrateInfo = video.bitrateInfo;
+  const candidates = [];
+
+  const bitrateInfo = video.bitrateInfo || video.BitrateInfo;
   if (bitrateInfo) {
     const entries = Array.isArray(bitrateInfo) ? bitrateInfo : [bitrateInfo];
-    let bestUrl = null;
-    let bestSize = 0;
     for (const info of entries) {
       const playAddr = info.PlayAddr || info.playAddr;
       const urlList = playAddr?.UrlList || playAddr?.urlList || [];
       const width = Number(playAddr?.Width || playAddr?.width || 0);
       const height = Number(playAddr?.Height || playAddr?.height || 0);
-      const size = width * height;
-      const candidate = urlList[0];
-      if (candidate && size >= bestSize) {
-        bestSize = size;
-        bestUrl = candidate;
+      for (const url of urlList) {
+        if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+          candidates.push({ url, score: width * height });
+        }
       }
-    }
-    if (bestUrl) {
-      return bestUrl;
     }
   }
 
-  return video.playAddr || video.downloadAddr || null;
+  for (const key of [
+    "playAddr",
+    "downloadAddr",
+    "play_addr",
+    "download_addr",
+  ]) {
+    const value = video[key];
+    if (typeof value === "string" && /^https?:\/\//i.test(value)) {
+      candidates.push({ url: value, score: 1 });
+    } else if (value && typeof value === "object") {
+      const urlList = value.UrlList || value.urlList || [];
+      for (const url of urlList) {
+        if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+          candidates.push({ url, score: 1 });
+        }
+      }
+    }
+  }
+
+  const playAddrStruct = video.playAddrStruct || video.PlayAddrStruct;
+  if (playAddrStruct) {
+    const urlList = playAddrStruct.UrlList || playAddrStruct.urlList || [];
+    for (const url of urlList) {
+      if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+        candidates.push({ url, score: 1 });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].url;
+}
+
+function resolveGalleryDlBinary() {
+  const homeBin = join(
+    homedir(),
+    ".orion",
+    "gallery-downloader",
+    "bin",
+    process.platform === "win32" ? "gallery-dl-win.exe" : "gallery-dl-linux",
+  );
+  if (existsSync(homeBin)) {
+    return homeBin;
+  }
+  return null;
+}
+
+function findDownloadedPostFile(destDir, postId) {
+  const extensions = ["mp4", "webm", "jpg", "jpeg", "webp", "png", "mp3"];
+  for (const ext of extensions) {
+    const candidate = join(destDir, `${postId}.${ext}`);
+    if (existsSync(candidate) && statSync(candidate).size > 0) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function downloadPostWithGalleryDl(postUrl, destDir, postId, session, ctx) {
+  const binary = resolveGalleryDlBinary();
+  if (!binary) {
+    throw new Error("gallery-dl binary not found under ~/.orion");
+  }
+
+  let cookiesPath = session.cookiesFilePath;
+  let tempDir = null;
+  if (!cookiesPath || !existsSync(cookiesPath)) {
+    if (!session.cookies.map.size) {
+      throw new Error("No Auth cookies file for gallery-dl");
+    }
+    tempDir = mkdtempSync(join(tmpdir(), "orion-tiktok-"));
+    cookiesPath = join(tempDir, "cookies.txt");
+    writeFileSync(cookiesPath, toNetscapeCookies(session.cookies.map), "utf8");
+  }
+
+  try {
+    ctx.log(`[TikTok] gallery-dl download ${postId}`);
+    const { stderr, code } = await runProcess(
+      binary,
+      [
+        "--cookies",
+        cookiesPath,
+        "-d",
+        destDir,
+        "-o",
+        "filename={id}.{extension}",
+        "-o",
+        "directory=",
+        postUrl,
+      ],
+      ctx.signal,
+    );
+
+    const outputPath = findDownloadedPostFile(destDir, postId);
+    if (outputPath) {
+      return;
+    }
+
+    const hint = (stderr || "").trim().split(/\r?\n/).slice(-4).join(" ");
+    throw new Error(
+      `gallery-dl exit ${code}${hint ? `: ${hint.slice(0, 220)}` : ""}`,
+    );
+  } finally {
+    if (tempDir) {
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+  }
+}
+
+async function resolveUrlsWithGalleryDl(postUrl, session, ctx) {
+  const binary = resolveGalleryDlBinary();
+  if (!binary) {
+    throw new Error("gallery-dl binary not found under ~/.orion");
+  }
+
+  let cookiesPath = session.cookiesFilePath;
+  let tempDir = null;
+
+  if (!cookiesPath || !existsSync(cookiesPath)) {
+    if (!session.cookies.map.size) {
+      throw new Error("No Auth cookies file and no Cookie header for gallery-dl");
+    }
+    tempDir = mkdtempSync(join(tmpdir(), "orion-tiktok-"));
+    cookiesPath = join(tempDir, "cookies.txt");
+    writeFileSync(cookiesPath, toNetscapeCookies(session.cookies.map), "utf8");
+  }
+
+  try {
+    ctx.log(`[TikTok] gallery-dl --get-urls ${postUrl}`);
+    const { stdout, stderr, code } = await runProcess(
+      binary,
+      ["--get-urls", "--cookies", cookiesPath, postUrl],
+      ctx.signal,
+    );
+
+    const urls = parseGalleryDlUrlOutput(stdout);
+    if (urls.length === 0) {
+      const hint = (stderr || "").trim().split(/\r?\n/).slice(-4).join(" ");
+      throw new Error(
+        `gallery-dl exit ${code}${hint ? `: ${hint.slice(0, 220)}` : " (empty stdout)"}`,
+      );
+    }
+
+    return urls;
+  } finally {
+    if (tempDir) {
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+  }
+}
+
+/**
+ * gallery-dl prints the primary URL first, then fallback mirrors as "| https://...".
+ * Keep primary lines only so we don't download the same video 3–4 times.
+ */
+function parseGalleryDlUrlOutput(stdout) {
+  const urls = [];
+  for (const raw of String(stdout || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("|")) {
+      continue;
+    }
+    if (/^https?:\/\//i.test(line)) {
+      urls.push(line);
+    }
+  }
+  return urls;
+}
+
+function toNetscapeCookies(cookieMap) {
+  const lines = ["# Netscape HTTP Cookie File"];
+  for (const [name, value] of cookieMap.entries()) {
+    lines.push(`.tiktok.com\tTRUE\t/\tFALSE\t0\t${name}\t${value}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function runProcess(command, args, signal) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    const onAbort = () => {
+      child.kill();
+      reject(new Error("Operation canceled"));
+    };
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    child.on("error", (error) => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      resolve({ stdout, stderr, code: code ?? 1 });
+    });
+  });
+}
+
+function guessExtension(url) {
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    const match = pathname.match(/\.([a-z0-9]{2,5})$/);
+    if (match) {
+      return match[1];
+    }
+  } catch {
+    // ignore
+  }
+  if (/\.jpe?g/i.test(url)) {
+    return "jpg";
+  }
+  if (/\.webp/i.test(url)) {
+    return "webp";
+  }
+  return "mp4";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function extractRehydrationData(html) {
